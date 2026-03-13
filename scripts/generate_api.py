@@ -15,6 +15,7 @@ from urllib.request import Request, urlopen
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DOCS_DIR = ROOT_DIR / "docs"
 CARDS_DIR = DOCS_DIR / "cards"
+SEARCH_DIR = DOCS_DIR / "search"
 SETS_DIR = DOCS_DIR / "sets"
 
 SOURCE_OWNER = "PokemonTCG"
@@ -58,12 +59,17 @@ def write_json(path: Path, payload: Any) -> None:
 def reset_output_dirs() -> None:
     DOCS_DIR.mkdir(parents=True, exist_ok=True)
     CARDS_DIR.mkdir(parents=True, exist_ok=True)
+    SEARCH_DIR.mkdir(parents=True, exist_ok=True)
     SETS_DIR.mkdir(parents=True, exist_ok=True)
 
-    for directory in (CARDS_DIR, SETS_DIR):
+    for directory in (CARDS_DIR, SEARCH_DIR, SETS_DIR):
         if directory.exists():
             shutil.rmtree(directory)
         directory.mkdir(parents=True, exist_ok=True)
+
+    index_path = DOCS_DIR / "index.json"
+    if index_path.exists():
+        index_path.unlink()
 
     (DOCS_DIR / ".nojekyll").touch()
 
@@ -127,6 +133,32 @@ def set_sort_key(set_record: dict[str, Any]) -> tuple[str, str]:
     )
 
 
+def normalize_name_for_search(name: str | None) -> str:
+    if not name:
+        return ""
+
+    normalized = name.casefold()
+    normalized = re.sub(r"[^\w\s]|_", "", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized
+
+
+def word_to_shard_key(word: str) -> str:
+    if len(word) >= 2:
+        return word[:2]
+    return word.ljust(2, word[-1])
+
+
+def shard_keys_for_card(card: dict[str, Any]) -> set[str]:
+    normalized_name = normalize_name_for_search(card.get("name"))
+    words = normalized_name.split()
+    return {
+        word_to_shard_key(word)
+        for word in words
+        if word
+    }
+
+
 def fetch_cards_for_set(branch: str, set_record: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
     set_id = set_record["id"]
     url = raw_url(branch, f"cards/en/{set_id}.json")
@@ -141,8 +173,8 @@ def generate() -> dict[str, int]:
 
     reset_output_dirs()
 
-    all_cards: list[dict[str, Any]] = []
     set_index: list[dict[str, Any]] = []
+    search_shards: dict[str, list[dict[str, Any]]] = {}
 
     print(
         f"Fetching {len(set_records)} sets from "
@@ -165,7 +197,6 @@ def generate() -> dict[str, int]:
         set_id = set_record["id"]
         cards = cards_by_set[set_id]
         cards.sort(key=set_card_sort_key)
-        all_cards.extend(cards)
 
         set_summary = simplify_set(set_record, len(cards))
         set_index.append(set_summary)
@@ -173,9 +204,13 @@ def generate() -> dict[str, int]:
 
         for card in cards:
             write_json(CARDS_DIR / f"{card['id']}.json", card)
+            for shard_key in shard_keys_for_card(card):
+                search_shards.setdefault(shard_key, []).append(card)
 
-    all_cards.sort(key=card_sort_key)
-    write_json(DOCS_DIR / "index.json", all_cards)
+    for shard_key, cards in search_shards.items():
+        cards.sort(key=card_sort_key)
+        write_json(SEARCH_DIR / f"{shard_key}.json", cards)
+
     write_json(SETS_DIR / "index.json", set_index)
     write_json(
         DOCS_DIR / "meta.json",
@@ -183,12 +218,17 @@ def generate() -> dict[str, int]:
             "name": "Poketom API",
             "generatedFrom": f"{SOURCE_OWNER}/{SOURCE_REPO}",
             "defaultBranch": branch,
-            "cardCount": len(all_cards),
+            "cardCount": sum(len(cards) for cards in cards_by_set.values()),
             "setCount": len(set_index),
+            "searchShardCount": len(search_shards),
         },
     )
 
-    return {"cards": len(all_cards), "sets": len(set_index)}
+    return {
+        "cards": sum(len(cards) for cards in cards_by_set.values()),
+        "sets": len(set_index),
+        "shards": len(search_shards),
+    }
 
 
 def parse_args() -> argparse.Namespace:
@@ -202,7 +242,8 @@ def main() -> None:
     parse_args()
     counts = generate()
     print(
-        f"Generated {counts['cards']} cards across {counts['sets']} sets in "
+        f"Generated {counts['cards']} cards across {counts['sets']} sets and "
+        f"{counts['shards']} search shards in "
         f"{DOCS_DIR}"
     )
 

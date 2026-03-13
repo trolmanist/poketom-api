@@ -13,14 +13,32 @@ There is no backend, no database, and no paid API dependency. The repository fet
 
 Once GitHub Pages is enabled, the API is available at:
 
-- `https://USERNAME.github.io/poketom-api/index.json`
+- `https://USERNAME.github.io/poketom-api/search/ch.json`
 - `https://USERNAME.github.io/poketom-api/cards/base1-4.json`
 - `https://USERNAME.github.io/poketom-api/sets/index.json`
 - `https://USERNAME.github.io/poketom-api/sets/base1.json`
 
-### `index.json`
+### `search/{prefix}.json`
 
-Top-level card index for search and browsing. Each item is a lightweight card record:
+Search shards replace the old single `index.json` file. Each shard contains the full lightweight card objects that used to appear in the top-level index.
+
+Shard generation rules:
+
+- card names are lowercased
+- punctuation is removed
+- normalized names are split into words
+- each word contributes a 2-letter shard key from its first two characters
+
+Example:
+
+`Tom's Pikachu` -> `toms pikachu` -> shards `to` and `pi`
+
+So the card will appear in both:
+
+- `search/to.json`
+- `search/pi.json`
+
+Each shard item looks like this:
 
 ```json
 {
@@ -40,7 +58,7 @@ Top-level card index for search and browsing. Each item is a lightweight card re
 
 ### `cards/{id}.json`
 
-Individual card endpoint. Card files use the same lightweight schema as `index.json`, so fetching a single card is cheap and consistent.
+Individual card endpoint. Card files use the same lightweight schema as the search shards, so fetching a single card is cheap and consistent.
 
 ### `sets/index.json`
 
@@ -71,9 +89,10 @@ poketom-api/
 │       └── refresh-data.yml
 ├── docs/
 │   ├── .nojekyll
-│   ├── index.json
 │   ├── meta.json
 │   ├── cards/
+│   │   └── *.json
+│   ├── search/
 │   │   └── *.json
 │   └── sets/
 │       ├── index.json
@@ -89,8 +108,9 @@ poketom-api/
 
 1. Fetches the latest set index from the upstream `pokemon-tcg-data` repository.
 2. Downloads each set's English card JSON.
-3. Transforms the data into a simplified, static API schema.
-4. Writes the generated files into [`docs/`](/Users/tom/dev/poketom-api/docs).
+3. Transforms the data into lightweight card and set payloads.
+4. Builds 2-letter search shard files from normalized card-name word prefixes.
+5. Writes the generated files into [`docs/`](/Users/tom/dev/poketom-api/docs).
 
 Run it locally with:
 
